@@ -27,6 +27,7 @@
 #   -h   Suppress the HTML wrapper, just output the mapdata
 #   -m   Specify the Google maps magnification, defaults to $MAGDEFAULT
 #   -l   Specify the library URL for the map functions, irrelevant if -h is used
+#   -s   Show track points
 
 use strict;
 use Getopt::Std;
@@ -35,7 +36,7 @@ use XML::XPath;
 use XML::XPath::XMLParser;
 use Math::Trig qw(great_circle_distance deg2rad);
 use Time::Local;
-use vars qw($opt_h $opt_m $opt_l);
+use vars qw($opt_h $opt_m $opt_l $opt_s);
 
 my $MAGDEFAULT = 13;
 
@@ -67,7 +68,7 @@ if ($units eq 'mi') {
     die "Invalid units: $units; must be 'mi', 'km', 'ft', or 'm'.\n";
 }
 
-my $usage = "$0 [-h] track.gpx [ track.gpx ... ]\n";
+my $usage = "$0 [-hmls] track.gpx [ track.gpx ... ]\n";
 my @tracks = ();
 my @tfile = ();
 my $minlat = +180;
@@ -75,10 +76,11 @@ my $maxlat = -180;
 my $minlon = +180;
 my $maxlon = -180;
 
-die $usage if ! getopts('hil:m:');
+die $usage if ! getopts('hl:m:s');
 
 my $suppressHTML = $opt_h;
 my $libraryURL = $opt_l || "http://ndw.github.com/gpxgoogle/gmapfunc.js";
+my $showMarks = $opt_s;
 
 my $trackcount = 0;
 foreach my $gpxfile (@ARGV) {
@@ -220,6 +222,7 @@ print "     \"centerlng\": $mapcenterlong,\n";
 print "     \"zoom\": $magnification,\n";
 print "     \"strokeWeight\": 2,\n";
 print "     \"strokeOpacity\": 0.5,\n";
+print "     \"showTrackMarks\": true,\n" if $showMarks;
 print "     \"tracks\": [\n";
 
 for (my $pos = 0; $pos <= $#tracks; $pos++) {

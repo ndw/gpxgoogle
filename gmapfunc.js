@@ -60,7 +60,7 @@ function trkPt(map, lat, lon, elev, time, dist, uph, count) {
 
     if (mapdata.showTrackMarks) {
         var opts = {
-            icon: "http://norman.walsh.name/googlemap/x.png",
+            icon: "http://ndw.github.com/gpxgoogle/x.png",
             position: pt,
             title: "Point #" + count,
             map: map
