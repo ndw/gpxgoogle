@@ -3,7 +3,26 @@
 This script reads GPX data (for example, from your GPS) and plots it on a Google
 map.
 
-## .gpxgoogle config file
+## Usage
+
+`gpxgoogle [options] track.gpx [track.gpx ...]`
+
+The script reads configuration information from `~/.gpxgoogle` and then
+reads one or more track files and builds a Google maps plot of those
+tracks.
+
+#### Options:
+
+* `-h` Suppress the HTML wrapper, just output the mapdata
+* `-m` Specify the Google maps magnification, defaults to $MAGDEFAULT
+* `-l` Specify the library URL for the map functions, irrelevant if -h is used
+* `-s` Show track points
+
+## Example
+
+There's an example on the [project HTML page](http://ndw.github.com/gpxgoogle/).
+
+# .gpxgoogle config file
 
 The .gpxgoogle config file is a simple XML file:
 
@@ -24,7 +43,3 @@ The `colinear-threshold` determines how nearly colinear three points
 have to be in order to drop the middle one. Smaller values produce
 more accurate tracks at the expense of more points (larger, slower
 maps).
-
-## Example
-
-There's an example on the [project HTML page](http://ndw.github.com/gpxgoogle/).
