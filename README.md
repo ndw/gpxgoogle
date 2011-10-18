@@ -24,3 +24,7 @@ The `colinear-threshold` determines how nearly colinear three points
 have to be in order to drop the middle one. Smaller values produce
 more accurate tracks at the expense of more points (larger, slower
 maps).
+
+## Example
+
+There's an example on the [project HTML page](http://ndw.github.com/gpxgoogle/).
