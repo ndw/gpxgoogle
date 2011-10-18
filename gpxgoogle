@@ -1,0 +1,303 @@
+#!/usr/bin/perl -- # -*- Perl -*-
+
+# gpxgoogle -- Plot GPX tracks on a Google map
+#
+# Copyright (C) 2006-2011 Norman Walsh
+#
+# This is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# It is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public
+# License for more details.
+#
+# Usage:
+#
+# gpxgoogle [options] track.gpx [track.gpx ...]
+#
+# The script reads configuration information from ~/.gpxgoogle and then
+# reads one or more track files and builds a Google maps plot of those
+# tracks.
+#
+# Options:
+#
+#   -h   Suppress the HTML wrapper, just output the mapdata
+#   -m   Specify the Google maps magnification, defaults to $MAGDEFAULT
+#   -l   Specify the library URL for the map functions, irrelevant if -h is used
+
+use strict;
+use Getopt::Std;
+use English;
+use XML::XPath;
+use XML::XPath::XMLParser;
+use Math::Trig qw(great_circle_distance deg2rad);
+use Time::Local;
+use vars qw($opt_h $opt_m $opt_l);
+
+my $MAGDEFAULT = 13;
+
+my $xp = XML::XPath->new('filename' => $ENV{'HOME'} . "/.gpxgoogle");
+my $cfg = ($xp->find('config')->get_nodelist())[0];
+die "Unexpected root element in .gpxgoogle config file" if !$cfg;
+
+my $title = ($cfg->find('title')->get_nodelist())[0]->string_value();
+my $width = ($cfg->find('width')->get_nodelist())[0]->string_value();
+my $height = ($cfg->find('height')->get_nodelist())[0]->string_value();
+my $units = ($cfg->find('units')->get_nodelist())[0]->string_value();
+my $colinLimit = ($cfg->find('colinear-threshold')->get_nodelist())[0]->string_value();
+
+my $eradius = undef;
+my $pradius = undef;
+if ($units eq 'mi') {
+    $eradius = 3963.189;
+    $pradius = 3949.901;
+} elsif ($units eq 'km') {
+    $eradius = 6378.135;
+    $pradius = 6356.750;
+} elsif ($units eq 'ft') {
+    $eradius = 3963.189 * 5280.0;
+    $pradius = 3949.901 * 5280.0;
+} elsif ($units eq 'm') {
+    $eradius = 6378135;
+    $pradius = 6356750;
+} else {
+    die "Invalid units: $units; must be 'mi', 'km', 'ft', or 'm'.\n";
+}
+
+my $usage = "$0 [-h] track.gpx [ track.gpx ... ]\n";
+my @tracks = ();
+my @tfile = ();
+my $minlat = +180;
+my $maxlat = -180;
+my $minlon = +180;
+my $maxlon = -180;
+
+die $usage if ! getopts('hil:m:');
+
+my $suppressHTML = $opt_h;
+my $libraryURL = $opt_l || "http://ndw.github.com/gpxgoogle/gmapfunc.js";
+
+my $trackcount = 0;
+foreach my $gpxfile (@ARGV) {
+    $trackcount++;
+    my $xp = XML::XPath->new('filename' => $gpxfile);
+    #$xp->set_namespace('gpx', 'http://www.topografix.com/GPX/1/0');
+    #XML::XPath is broken wrt namespaces :-(
+    my $gpx = ($xp->find('gpx')->get_nodelist())[0];
+    die "Unexpected root element in GPX file (possibly XML::XPath bug).\n"
+        if !$gpx;
+
+    print STDERR "Loaded: $gpxfile\n";
+
+    foreach my $track ($gpx->find('trk')->get_nodelist()) {
+        foreach my $seg ($track->find('trkseg')->get_nodelist()) {
+            my $count = 0;
+            my @points = ();
+
+            foreach my $pt ($seg->find('trkpt')->get_nodelist()) {
+                $count++;
+
+                my $lat = $pt->getAttribute('lat');
+                my $lon = $pt->getAttribute('lon');
+
+                $minlat = $lat if $lat < $minlat;
+                $maxlat = $lat if $lat > $maxlat;
+                $minlon = $lon if $lon < $minlon;
+                $maxlon = $lon if $lon > $maxlon;
+
+                my $ele = ($pt->find('ele')->get_nodelist())[0];
+                $ele = $ele->string_value() if defined $ele;
+                $ele = "0" if !defined($ele);
+                my $time = ($pt->find('time')->get_nodelist())[0];
+                $time = $time->string_value() if defined $time;
+                my $tsec = undef;
+
+                if ($time =~ /(\d+)-(\d+)-(\d+)T(\d+):(\d+):(\d+)/) {
+                    $tsec = timegm($6,$5,$4,$3,$2-1,$1-1900);
+                }
+
+                my $pt = {};
+                $pt->{'lat'} = $lat;
+                $pt->{'lon'} = $lon;
+                $pt->{'ele'} = $ele;
+                $pt->{'time'} = $time;
+                $pt->{'tsec'} = $tsec;
+                $pt->{'count'} = $count;
+                push (@points, $pt);
+            }
+
+            push (@tracks, \@points);
+            push (@tfile, $trackcount);
+        }
+    }
+}
+
+my $clat = $minlat + (($maxlat - $minlat) / 2.0);
+my $clon = $minlon + (($maxlon - $minlon) / 2.0);
+
+# Trim out redundant and colinear points
+my $colincount = 0;
+for (my $pos = 0; $pos <= $#tracks; $pos++) {
+    my @points = @{$tracks[$pos]};
+    my $ptnum = 1;
+    while ($ptnum <= $#points) {
+        my $blat = $points[$ptnum-1]->{'lat'};
+        my $blon = $points[$ptnum-1]->{'lon'};
+        my $lat = $points[$ptnum]->{'lat'};
+        my $lon = $points[$ptnum]->{'lon'};
+        if ($blat == $lat && $blon == $lon) {
+            #print STDERR "Redundant: ", $points[$ptnum]->{'count'}, "\n";
+            splice(@points, $ptnum, 1);
+        } else {
+            $ptnum++;
+        }
+    }
+
+    $ptnum = 1;
+    while ($ptnum < $#points) {
+        my $blat = $points[$ptnum-1]->{'lat'};
+        my $blon = $points[$ptnum-1]->{'lon'};
+        my $lat = $points[$ptnum]->{'lat'};
+        my $lon = $points[$ptnum]->{'lon'};
+        my $elat = $points[$ptnum+1]->{'lat'};
+        my $elon = $points[$ptnum+1]->{'lon'};
+
+        # x=lon, y=lat
+        # Handle vertical lines
+        if ($elon - $blon == 0) {
+            my $d = abs($lon-$blon);
+            if ($d < $colinLimit) {
+                #print STDERR "Colinear: ", $points[$ptnum]->{'count'}, "\n";
+                $colincount++;
+                splice(@points, $ptnum, 1);
+            } else {
+                $ptnum++;
+            }
+        } else {
+            my $m = ($elat - $blat) / ($elon - $blon);
+            my $b = $blat - ($m * $blon);
+            my $colinlat = ($m*$lon) + $b;
+
+            my $d = abs($lat-$colinlat);
+            if ($d < $colinLimit) {
+                #print STDERR "Colinear: ", $points[$ptnum]->{'count'}, "\n";
+                $colincount++;
+                splice(@points, $ptnum, 1);
+            } else {
+                $ptnum++;
+            }
+        }
+    }
+
+    @{$tracks[$pos]} = @points;
+}
+
+print STDERR "Dropped $colincount colinear points\n" if $colincount > 0;
+
+if (!$suppressHTML) {
+    print "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n";
+    print "  <head>\n";
+    print "    <title>$title</title>\n";
+    print "    <script src=\"http://maps.google.com/maps/api/js?sensor=false\" type=\"text/javascript\"></script>\n";
+    print "  </head>\n";
+    print "  <body>\n";
+    print "    <div id=\"map\" style=\"width: $width; height: $height\"></div>\n";
+    print "    <script type=\"text/javascript\" src=\"$libraryURL\"></script>\n";
+    print "    <script type=\"text/javascript\">\n";
+    print "    //<![CDATA[\n";
+}
+
+my $magnification = $opt_m || $MAGDEFAULT;
+my $mapcenterlat = $clat;
+my $mapcenterlong = $clon;
+
+print "var mapdata = {\n";
+print "     \"centerlat\": $mapcenterlat,\n";
+print "     \"centerlng\": $mapcenterlong,\n";
+print "     \"zoom\": $magnification,\n";
+print "     \"strokeWeight\": 2,\n";
+print "     \"strokeOpacity\": 0.5,\n";
+print "     \"tracks\": [\n";
+
+for (my $pos = 0; $pos <= $#tracks; $pos++) {
+    my $points = $tracks[$pos];
+    my $tcount = $tfile[$pos];
+    my $count = 0;
+    my $plat = 0;
+    my $plon = 0;
+    my $psec = undef;
+    my $totdist = 0;
+
+    print "         [\n";
+
+    foreach my $point (@{$points}) {
+        my $lat = $point->{'lat'};
+        my $lon = $point->{'lon'};
+        my $ele = $point->{'ele'};
+        my $time = $point->{'time'};
+        my $tsec = $point->{'tsec'};
+        my $uph = undef;
+
+        if ($count > 0) {
+            print ",\n";
+
+            # See http://en.wikipedia.org/wiki/Earth_radius
+            my $a = $eradius;
+            my $b = $pradius;
+            my $a2 = $a * $a;
+            my $b2 = $b * $b;
+            my $cos2l = cos(deg2rad(90 - $plat));
+            $cos2l = $cos2l * $cos2l;
+            my $radius = ($a*$b) / sqrt($a2 - (($a2-$b2) * $cos2l));
+
+            my $u = great_circle_distance(deg2rad($plon), deg2rad(90 - $plat),
+                                          deg2rad($lon), deg2rad(90 - $lat),
+                                          $radius);
+            $totdist += $u;
+            if (defined($tsec) && defined($psec)) {
+                my $divisor = ($tsec-$psec)/3600;
+                if ($divisor > 0.0) {
+                    $uph = $u/$divisor;
+                }
+            }
+        }
+
+        $plat = $lat;
+        $plon = $lon;
+        $psec = $tsec;
+
+        $count++;
+
+        print "             {\n";
+        print "                \"lat\": ", $point->{'lat'}, ",\n";
+        print "                \"lng\": ", $point->{'lon'}, ",\n";
+        print "                \"ele\": ", $point->{'ele'}, ",\n";
+
+        if (defined($uph)) {
+            print "                \"velocity\": $uph,\n";
+        }
+
+        print "                \"time\": \"", $point->{'time'}, "\",\n";
+        print "                \"dist\": $totdist,\n";
+        print "                \"count\": ", $point->{'count'}, "\n";
+        print "             }";
+    }
+    print "\n         ]";
+    print "," if $pos < $#tracks;
+    print "\n";
+}
+
+print "     ]\n";
+print "};\n";
+
+print <<EOF3 if !$suppressHTML;
+    //]]>
+    </script>
+    <script type="text/javascript">plotTracks(mapdata, "map");</script>
+  </body>
+
+</html>
+EOF3
